@@ -1,0 +1,12 @@
+name: Test Mac Docker
+on: [push]
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - name: Start Colima
+        run: |
+          brew install docker docker-compose colima
+          colima start
+      - name: Check Docker
+        run: docker info
