@@ -15,7 +15,7 @@ jobs:
       - name: Run install.sh pipe
         run: |
           # We test that the install path works by fetching latest release.
-          curl -fsSL https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.sh | bash -s -- --no-auto-start
+          curl -fsSL "https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.sh?cb=$GITHUB_SHA" | bash -s -- --no-auto-start
 
       - name: Verify installation
         run: |
@@ -50,7 +50,7 @@ jobs:
       - name: Run install.ps1 pipe
         shell: powershell
         run: |
-          Invoke-RestMethod https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.ps1 | Invoke-Expression
+          Invoke-RestMethod "https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.ps1?cb=$env:GITHUB_SHA" | Invoke-Expression
 
       - name: Verify installation
         shell: powershell
