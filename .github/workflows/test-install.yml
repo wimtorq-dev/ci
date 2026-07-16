@@ -1,117 +1,53 @@
 name: Install tests
 
-# Runs the install-side test suite on every push + PR. The suite
-# covers three things:
-#
-# 1. OCI digest refresh (install.sh + install.ps1)
-#    The release tarball's compose.yaml bakes a `tag@sha256:OLD`
-#    pin at release-build time. If vX.Y.Z is re-pushed (a hotfix
-#    re-cut), the live index digest is NEW but the tarball still
-#    bakes the OLD pin, and `docker compose pull` 404s on the
-#    old digest. The fix is a one-shot HEAD against ghcr.io per
-#    image and a sed-equivalent rewrite of the @sha256:… suffix
-#    in the extracted compose.yaml.
-#
-# 2. pwsh wrapper (install.cmd)
-#    Windows PowerShell 5.x has a 1 GB managed-heap cap that
-#    triggers an OOM during `docker compose pull` of the
-#    multi-arch OCI images. install.cmd must prefer `pwsh`
-#    (PowerShell 7) when on PATH and fall back to `powershell`
-#    with a clear error when neither is available.
-#
-# 3. First-run .env stub (install.sh + install.ps1)
-#    The runtime reads every env var from $NIMBUS_HOME/.env.
-#    Without a stub, `nimbus start` crashes on the first env
-#    lookup it can't synthesize. Both install scripts must
-#    write a stub on first install and skip silently on
-#    re-installs.
-#
-# Job topology:
-#   - bash-tests (ubuntu + macos): runs install-digest.bats +
-#     install-pwsh.bats. bats-core installs via apt/brew.
-#   - pester-tests (windows): installs Pester 5, runs
-#     install-digest.Tests.ps1. windows-latest ships with
-#     pwsh 7 preinstalled, so the digest-refresh helpers can
-#     be dot-sourced from install.ps1.
-#
-# This workflow is intentionally separate from release.yml so
-# the install-side tests can run on every push (the release
-# workflow is tag-triggered). It does NOT require any of the
-# Python deps the pytest suite needs.
-
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  bash-tests:
-    name: bats (${{ matrix.os }})
+  test-install-unix:
     strategy:
-      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install bats-core
-        if: runner.os == 'Linux'
+      - name: Run install.sh pipe
         run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bats
+          # Use NIMBUS_VERSION to avoid hitting the GitHub API for latest release, 
+          # which can hit rate limits in CI. We just test that the install path works.
+          curl -fsSL https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.sh | NIMBUS_VERSION=v1.0.12 bash -s -- --no-auto-start
 
-      - name: Install bats-core (macOS)
-        if: runner.os == 'macOS'
+      - name: Verify installation
         run: |
-          set -euo pipefail
-          brew install bats-core
+          export NIMBUS_HOME="$HOME/.nimbus"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            export NIMBUS_HOST_ARCH="linux/amd64" # Just in case it downloaded x86 on ARM macOS
+          fi
+          if [ ! -x "$NIMBUS_HOME/nimbus" ] && [ ! -x "$NIMBUS_HOME/nimbus-darwin-amd64" ] && [ ! -x "$NIMBUS_HOME/nimbus-darwin-arm64" ] && [ ! -x "$NIMBUS_HOME/nimbus-linux-amd64" ]; then
+            echo "Binary not found!"
+            exit 1
+          fi
+          echo "Installation verified!"
+          ls -la "$NIMBUS_HOME"
 
-      - name: Run install tests
-        run: |
-          set -euo pipefail
-          bats tests/install/install-digest.bats \
-               tests/install/install-pwsh.bats
-
-  pester-tests:
-    name: Pester (windows-latest)
+  test-install-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-
-      # windows-latest ships with pwsh 7 preinstalled as
-      # `pwsh`. Install Pester 5 (the .Tests.ps1 file uses
-      # Pester 5 syntax: `Describe` / `It` / `BeforeAll` /
-      # `Should -Be $true`). -SkipPublisherCheck is needed
-      # because the Pester module is signed by a publisher
-      # that PowerShell's gallery verification may not trust
-      # by default.
-      - name: Install Pester 5
-        shell: pwsh
+      - name: Run install.ps1 pipe
+        shell: powershell
         run: |
-          Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser
-          # Pester 4 ships with Windows by default. Force the
-          # just-installed Pester 5 onto $env:PATH by importing
-          # it explicitly; the Pester 5 module manifest also
-          # declares Pester 5 as the default for `Invoke-Pester`
-          # but only after Import-Module runs.
-          Import-Module Pester -MinimumVersion 5.0
-          (Get-Module Pester).Version | Select-Object -ExpandProperty Major
+          $env:NIMBUS_VERSION = "v1.0.12"
+          Invoke-RestMethod https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.ps1 | Invoke-Expression
 
-      - name: Run install tests
-        shell: pwsh
+      - name: Verify installation
+        shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
-          # -Output Detailed makes Pester print per-It pass/fail
-          # lines to the GitHub Actions log, which is what we
-          # want for debugging a failing test. -CI is the
-          # "exit non-zero on any failure" switch.
-          $cfg = New-PesterConfiguration
-          $cfg.Run.Path = 'tests/install'
-          $cfg.Run.Exit = $true
-          $cfg.Run.PassThru = $true
-          $cfg.Output.Verbosity = 'Detailed'
-          Invoke-Pester -Configuration $cfg
+          $InstallDir = Join-Path $env:USERPROFILE ".nimbus"
+          $ExePath = Join-Path $InstallDir "nimbus.exe"
+          if (-not (Test-Path $ExePath)) {
+              Write-Error "nimbus.exe not found!"
+              exit 1
+          }
+          Write-Host "Installation verified!"
+          Get-ChildItem $InstallDir

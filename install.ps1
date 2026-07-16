@@ -683,7 +683,12 @@ if (-not $IsSource) {
 }
 
 # 6. Auto-start option
-$Response = Read-Host "  Would you like to start Nimbus now? (y/N)"
+try {
+    $Response = Read-Host "  Would you like to start Nimbus now? (y/N)"
+} catch {
+    $Response = "n"
+}
+
 if ($Response -match "^[Yy]$") {
     Write-Host "  Starting Nimbus..."
     Set-Location $InstallDir
