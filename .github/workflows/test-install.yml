@@ -14,9 +14,8 @@ jobs:
     steps:
       - name: Run install.sh pipe
         run: |
-          # Use NIMBUS_VERSION to avoid hitting the GitHub API for latest release, 
-          # which can hit rate limits in CI. We just test that the install path works.
-          curl -fsSL https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.sh | NIMBUS_VERSION=v1.0.12 bash -s -- --no-auto-start
+          # We test that the install path works by fetching latest release.
+          curl -fsSL https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.sh | bash -s -- --no-auto-start
 
       - name: Verify installation
         run: |
@@ -37,7 +36,6 @@ jobs:
       - name: Run install.ps1 pipe
         shell: powershell
         run: |
-          $env:NIMBUS_VERSION = "v1.0.12"
           Invoke-RestMethod https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.ps1 | Invoke-Expression
 
       - name: Verify installation
