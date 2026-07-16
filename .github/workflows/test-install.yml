@@ -20,27 +20,32 @@ jobs:
       - name: Verify installation
         run: |
           export NIMBUS_HOME="$HOME/.nimbus"
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            export NIMBUS_HOST_ARCH="linux/amd64" # Just in case it downloaded x86 on ARM macOS
-          fi
-          if [ ! -x "$NIMBUS_HOME/nimbus" ] && [ ! -x "$NIMBUS_HOME/nimbus-darwin-amd64" ] && [ ! -x "$NIMBUS_HOME/nimbus-darwin-arm64" ] && [ ! -x "$NIMBUS_HOME/nimbus-linux-amd64" ]; then
-            echo "Binary not found!"
+          export PATH="$NIMBUS_HOME:$PATH"
+
+          # 1. Binary must exist and be executable
+          if [ ! -x "$NIMBUS_HOME/nimbus" ]; then
+            echo "::error::nimbus binary not found or not executable!"
             exit 1
           fi
-          echo "Installation verified!"
+          echo "✅ Binary found"
           ls -la "$NIMBUS_HOME"
-          
-          # Test nimbus start on Ubuntu (which has Docker daemon running)
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-            echo "Testing nimbus start..."
-            echo "OPENROUTER_API_KEY=dummy_key_for_ci" >> "$NIMBUS_HOME/.env"
-            
-            export NIMBUS_HOST_ARCH="linux/amd64"
-            
-            "$NIMBUS_HOME/nimbus" start
-            echo "nimbus start succeeded!"
-            "$NIMBUS_HOME/nimbus" stop
-          fi
+
+          # 2. Binary must actually run (not crash, not blocked)
+          nimbus --help
+          echo "✅ nimbus --help succeeded"
+
+      - name: Test nimbus start (Ubuntu only)
+        if: runner.os == 'Linux'
+        run: |
+          export NIMBUS_HOME="$HOME/.nimbus"
+          export PATH="$NIMBUS_HOME:$PATH"
+          export NIMBUS_HOST_ARCH="linux/amd64"
+
+          echo "OPENROUTER_API_KEY=dummy_key_for_ci" >> "$NIMBUS_HOME/.env"
+
+          nimbus start
+          echo "✅ nimbus start succeeded"
+          nimbus stop
 
   test-install-windows:
     runs-on: windows-latest
@@ -55,9 +60,19 @@ jobs:
         run: |
           $InstallDir = Join-Path $env:USERPROFILE ".nimbus"
           $ExePath = Join-Path $InstallDir "nimbus.exe"
+
+          # 1. Binary must exist
           if (-not (Test-Path $ExePath)) {
               Write-Error "nimbus.exe not found!"
               exit 1
           }
-          Write-Host "Installation verified!"
+          Write-Host "✅ Binary found"
           Get-ChildItem $InstallDir
+
+          # 2. Binary must actually run (not blocked by Defender)
+          & $ExePath --help
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "nimbus.exe --help failed with exit code $LASTEXITCODE"
+              exit 1
+          }
+          Write-Host "✅ nimbus --help succeeded"
