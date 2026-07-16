@@ -350,7 +350,7 @@ printf "  Fetching latest release... "
         else
             # Frozen-in-time fallback used only when the API is unreachable
             # (offline install, rate limit, etc.). Update when cutting releases.
-            NIMBUS_VERSION="v1.0.12"
+            NIMBUS_VERSION="v1.0.0"
         fi
     fi
     if [ -z "$NIMBUS_VERSION" ]; then
