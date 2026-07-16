@@ -35,9 +35,7 @@ jobs:
             echo "Testing nimbus start..."
             echo "OPENROUTER_API_KEY=dummy_key_for_ci" >> "$NIMBUS_HOME/.env"
             
-            # The nimbus gateway images are currently arm64-only. 
-            # We must install QEMU so the amd64 runner can run them via Docker.
-            sudo apt-get update && sudo apt-get install -y qemu-user-static binfmt-support
+            export NIMBUS_HOST_ARCH="linux/amd64"
             
             "$NIMBUS_HOME/nimbus" start
             echo "nimbus start succeeded!"
