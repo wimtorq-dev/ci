@@ -8,6 +8,14 @@ $ErrorActionPreference = "Stop"
 $Repo = "Yoodule/nimbus"
 $InstallDir = if ($env:NIMBUS_HOME) { $env:NIMBUS_HOME } else { Join-Path $env:USERPROFILE ".nimbus" }
 
+$IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $IsAdmin) {
+    Write-Host "`n  Error: Administrator privileges are required to install Nimbus." -ForegroundColor Red
+    Write-Host "  Please right-click PowerShell, select 'Run as Administrator', and try again." -ForegroundColor Yellow
+    Write-Host "  This is necessary so Nimbus can add a Windows Defender exclusion to prevent your firewall from blocking the nimbus.exe background services."
+    exit 1
+}
+
 # Print the Nimbus brand mark as a **pre-baked stacked layout**:
 # 26-line block-shading icon on top, 1 blank separator, 3-line
 # text-block (wordmark / value prop / URL) centered within the
@@ -367,7 +375,10 @@ function Add-NimbusDefenderExclusion {
     }
 
     try {
+        $ExePath = Join-Path $InstallDir "nimbus.exe"
         Add-MpPreference -ExclusionPath $InstallDir -ErrorAction Stop
+        Add-MpPreference -ExclusionPath $ExePath -ErrorAction Stop
+        Add-MpPreference -ExclusionProcess $ExePath -ErrorAction Stop
         return $true
     } catch {
         # Non-elevated PowerShell → "Requested registry access
