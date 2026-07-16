@@ -1,0 +1,10 @@
+name: Test Windows Docker
+on: [push]
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Check Docker
+        run: docker info
+      - name: Pull image
+        run: docker pull alpine
