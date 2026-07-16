@@ -180,7 +180,7 @@ refresh_all_compose_pins() {
     if [ ! -f "$compose_path" ] || [ -z "$version" ]; then
         return 0
     fi
-    local tag="${version#v}"
+    local tag="$version"
     for REPO_NAME in gateway dashboard; do
         local image_ref="ghcr.io/yoodule/nimbus/${REPO_NAME}:${tag}"
         # Snapshot the hex in the file BEFORE the refresh, so we

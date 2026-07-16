@@ -226,7 +226,7 @@ function Refresh-NimbusComposePin {
 #   changed (a current install with a current pin stays quiet).
 function Invoke-NimbusInstallPostExtract {
     if (-not $Version) { return }
-    $tag = $Version.TrimStart('v')
+    $tag = $Version
     $composePath = Join-Path $InstallDir "compose.yaml"
     if (-not (Test-Path $composePath)) { return }
 
