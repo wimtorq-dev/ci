@@ -33,7 +33,7 @@ jobs:
           # Test nimbus start on Ubuntu (which has Docker daemon running)
           if [[ "${{ runner.os }}" == "Linux" ]]; then
             echo "Testing nimbus start..."
-            export OPENROUTER_API_KEY="dummy_key_for_ci"
+            echo "OPENROUTER_API_KEY=dummy_key_for_ci" >> "$NIMBUS_HOME/.env"
             "$NIMBUS_HOME/nimbus" start
             echo "nimbus start succeeded!"
             "$NIMBUS_HOME/nimbus" stop
