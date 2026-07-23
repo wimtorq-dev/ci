@@ -151,6 +151,21 @@ jobs:
           # aligns the two workflows and unblocks the cross-platform
           # install gate.
           NIMBUS_HOST_ARCH: linux/amd64
+          # Skip the live OpenRouter key probe. The gate
+          # pre-populates a dummy `sk-ci-dummy-not-real`
+          # key into $NIMBUS_HOME/.env so the first-start
+          # path runs end-to-end. The dummy is not a real
+          # OpenRouter key, so the new live verifier
+          # (added in CLI commit 3ce560c) correctly
+          # returns 401 and would reject it — that
+          # would break the gate, which is the opposite
+          # of what we want (the gate tests install +
+          # first-start, not OpenRouter auth). Setting
+          # `NIMBUS_SKIP_KEY_VALIDATION=1` short-circuits
+          # the verifier and trusts the pre-populated
+          # key verbatim. CI-only — real users install
+          # a real key and never see this path.
+          NIMBUS_SKIP_KEY_VALIDATION: "1"
         run: |
           # nimbus reads OPENROUTER_API_KEY from $NIMBUS_HOME/.env, NOT from
           # the parent process env (proven by the v1.0.12 install path bug).
