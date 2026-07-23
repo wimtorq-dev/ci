@@ -239,6 +239,17 @@ jobs:
 
       - name: Stop the gateway (Linux only)
         if: runner.os == 'Linux'
+        env:
+          # `nimbus stop` opens $NIMBUS_HOME/.env to find the
+          # compose project name + REDIS_PASSWORD (the same .env
+          # `nimbus start` wrote). Without this, the binary
+          # falls back to $HOME/.nimbus or /root/.nimbus, gets
+          # "permission denied" (the install stub is chmod 0600
+          # under /home/runner/.nimbus), and silently leaves
+          # the gateway container Up — the orphan check below
+          # then fires on the next iteration and the gate
+          # fails. Same env block the Start step uses.
+          NIMBUS_HOME: ${{ steps.install-path.outputs.nimbus_home }}
         run: |
           # `nimbus stop` only stops containers; the named volumes persist
           # on the runner's docker daemon and would conflict with the next
