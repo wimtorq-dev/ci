@@ -18,29 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pre-test cleanup (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          # GitHub-hosted runners have a fresh docker daemon, but nimbus's
-          # named volumes (nimbus_redis_data, nimbus_postgres_data, etc.) can
-          # be left over from a previous run of this same workflow (the
-          # workflow is cached on the runner image). Wipe them so each run
-          # starts clean — otherwise stale volumes with different secrets
-          # conflict with the fresh install stub's REDIS_PASSWORD / POSTGRES
-          # values and `nimbus start` aborts.
-          if ! command -v docker >/dev/null 2>&1; then
-            echo "::warning::docker not on PATH yet — install.sh should have provisioned it"
-            exit 0
-          fi
-          echo "Pre-test cleanup: removing stale nimbus docker resources"
-          docker ps -a --format '{{.Names}}' | grep -E 'gateway|qdrant|postgres|redis' \
-            | xargs -r docker rm -f 2>&1 || true
-          docker volume ls --format '{{.Name}}' | grep -E '^nimbus_' \
-            | xargs -r docker volume rm 2>&1 || true
-          docker network ls --format '{{.Name}}' | grep -E 'nimbus' \
-            | xargs -r docker network rm 2>&1 || true
-          echo "OK cleanup complete"
-
       - name: Run install pipe
         run: |
           curl -fsSL \
@@ -63,6 +40,66 @@ jobs:
             ls -la /root/.nimbus 2>&1 || true
             exit 1
           fi
+
+      - name: Pre-start cleanup (Linux only)
+        if: runner.os == 'Linux'
+        env:
+          NIMBUS_HOME: ${{ steps.install-path.outputs.nimbus_home }}
+        run: |
+          # GitHub-hosted runners cache the docker daemon + its named volumes
+          # across runs of this same workflow. A prior run that got past
+          # `nimbus start` will have left `nimbus_redis_data`,
+          # `nimbus_postgres_data`, etc. with the *prior* run's
+          # REDIS_PASSWORD frozen in. The fresh install stub writes a new
+          # REDIS_PASSWORD; the next `nimbus start` then aborts with
+          # "volume is frozen under a different REDIS_PASSWORD". Wipe them.
+          #
+          # We do this AFTER the install (not before) because:
+          #   1. install.sh provisions docker on Linux runners — the daemon
+          #      isn't reliably up until install.sh finishes
+          #   2. install.sh itself doesn't touch nimbus_* volumes, so the
+          #      wipe is safe to do at either point — but doing it post-
+          #      install lets us wait for the daemon and add diagnostics
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "::error::docker not on PATH after install.sh — install.sh should have provisioned it"
+            exit 1
+          fi
+          # Wait up to 60s for the daemon to be ready (it may be still
+          # starting up; install.sh just provisioned it).
+          for i in $(seq 1 30); do
+            if docker info >/dev/null 2>&1; then
+              echo "OK docker daemon is ready (waited ${i}x2s)"
+              break
+            fi
+            sleep 2
+          done
+          if ! docker info >/dev/null 2>&1; then
+            echo "::error::docker daemon did not become ready within 60s"
+            docker info 2>&1 | head -20 || true
+            exit 1
+          fi
+          # Diagnostics: log what we see BEFORE the wipe so the next run's
+          # log shows whether the stale volume was actually present.
+          echo "Volumes before wipe:"
+          docker volume ls --format '  {{.Name}}' || true
+          echo "Containers before wipe:"
+          docker ps -a --format '  {{.Names}}' || true
+          echo "Networks before wipe:"
+          docker network ls --format '  {{.Name}}' | grep -i nimbus || echo "  (none)"
+          # Wipe.
+          docker ps -a --format '{{.Names}}' | grep -E 'gateway|qdrant|postgres|redis|nimbus' \
+            | xargs -r docker rm -f 2>&1 || true
+          docker volume ls --format '{{.Name}}' | grep -E '^nimbus_' \
+            | xargs -r docker volume rm 2>&1 || true
+          docker network ls --format '{{.Name}}' | grep -E 'nimbus' \
+            | xargs -r docker network rm 2>&1 || true
+          # Post-wipe diagnostics — confirm nothing nimbus-* remains.
+          remaining=$(docker volume ls --format '{{.Name}}' | grep -E '^nimbus_' || true)
+          if [ -n "$remaining" ]; then
+            echo "::error::nimbus volumes still present after wipe: $remaining"
+            exit 1
+          fi
+          echo "OK pre-start cleanup complete — no nimbus volumes remain"
 
       - name: Assert binary matches release tag
         run: |
@@ -144,10 +181,15 @@ jobs:
       - name: Stop the gateway (Linux only)
         if: runner.os == 'Linux'
         run: |
-          "${{ steps.install-path.outputs.nimbus_home }}/nimbus" stop
+          # `nimbus stop` only stops containers; the named volumes persist
+          # on the runner's docker daemon and would conflict with the next
+          # run's fresh REDIS_PASSWORD. Run `nimbus uninstall --purge` so
+          # the next dry-run on this same runner starts clean.
+          "${{ steps.install-path.outputs.nimbus_home }}/nimbus" stop || true
+          "${{ steps.install-path.outputs.nimbus_home }}/nimbus" uninstall --purge || true
           for i in $(seq 1 30); do
             if ! docker ps --format '{{.Names}}' | grep -qE 'gateway|qdrant|postgres|redis'; then
-              echo "OK all nimbus containers stopped cleanly"
+              echo "OK all nimbus containers stopped + volumes purged"
               exit 0
             fi
             sleep 2
