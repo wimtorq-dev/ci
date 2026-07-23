@@ -70,16 +70,21 @@ jobs:
         if: runner.os == 'Linux'
         env:
           NIMBUS_HOME: ${{ steps.install-path.outputs.nimbus_home }}
-          OPENROUTER_API_KEY: sk-ci-dummy-not-real
-          QDRANT_API_KEY: ci-dummy
-          VNC_PASSWORD: ci-dummy
-          GITHUB_PERSONAL_ACCESS_TOKEN: ci-dummy
         run: |
-          # Source the install stub for any keys the install pipe populated
-          set -a
-          . "$NIMBUS_HOME/.env"
-          set +a
-          export OPENROUTER_API_KEY QDRANT_API_KEY VNC_PASSWORD GITHUB_PERSONAL_ACCESS_TOKEN
+          # nimbus reads OPENROUTER_API_KEY from $NIMBUS_HOME/.env, NOT from
+          # the parent process env (proven by the v1.0.12 install path bug).
+          # The install stub doesn't write the auto-generated secrets, so we
+          # must backfill them in the file before nimbus will start.
+          env_file="$NIMBUS_HOME/.env"
+          [ -w "$env_file" ] || chmod 0666 "$env_file" 2>/dev/null || true
+          grep -q '^OPENROUTER_API_KEY=' "$env_file" \
+            || echo 'OPENROUTER_API_KEY=sk-ci-dummy-not-real' >> "$env_file"
+          grep -q '^QDRANT_API_KEY=' "$env_file" \
+            || echo 'QDRANT_API_KEY=ci-dummy' >> "$env_file"
+          grep -q '^VNC_PASSWORD=' "$env_file" \
+            || echo 'VNC_PASSWORD=ci-dummy' >> "$env_file"
+          grep -q '^GITHUB_PERSONAL_ACCESS_TOKEN=' "$env_file" \
+            || echo 'GITHUB_PERSONAL_ACCESS_TOKEN=ci-dummy' >> "$env_file"
           "$NIMBUS_HOME/nimbus" start
 
       - name: Assert gateway container is running (Linux only)
@@ -189,17 +194,27 @@ jobs:
             Write-Warning "Defender exclusion key not found (Defender may not be enabled on this runner - non-fatal)"
             exit 0
           }
-          # Dump the registered exclusions so a CI failure is debuggable
-          Write-Host "Registered Defender exclusions under HKLM Paths:"
-          $registered = @()
+          # Filter out (a) PSObject built-in properties (PSPath, PSParentPath, ...)
+          # and (b) pre-existing default exclusions that GitHub-hosted windows
+          # runners come with (C:\, D:\). The check is: did install.ps1 ADD
+          # a parent-path exclusion like the user's $env:USERPROFILE?
+          $psProps = @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')
+          $defaultExclusions = @('C:\','D:\')
+          $installAdded = @()
           foreach ($name in $exclusions.PSObject.Properties.Name) {
-            Write-Host "  - $name"
-            $registered += $name
+            if ($psProps -contains $name) { continue }
+            if ($defaultExclusions -contains $name) { continue }
+            # Is this a parent path of $installDir? i.e. a prefix that is
+            # NOT installDir itself and ends with a path separator (or IS
+            # USERPROFILE / a known-wrong root).
+            if ($name -eq $env:USERPROFILE) {
+              $installAdded += $name
+            }
           }
-          $dangerous = @($env:USERPROFILE, "C:\")
-          $bad = $registered | Where-Object { $dangerous -contains $_ }
-          if ($bad.Count -gt 0) {
-            Write-Error "Defender exclusion includes a parent path: $($bad -join ', '). install.ps1 must scope to InstallDir only"
+          Write-Host "Defender exclusions added by install.ps1 that are parent paths:"
+          if ($installAdded.Count -gt 0) {
+            foreach ($p in $installAdded) { Write-Host "  - $p" }
+            Write-Error "Defender exclusion includes a parent path: $($installAdded -join ', '). install.ps1 must scope to InstallDir only"
             exit 1
           }
           Write-Host "OK Defender exclusion is per-install (no parent-path exclusions)"
