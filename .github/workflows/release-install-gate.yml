@@ -1,0 +1,185 @@
+name: release-install-gate
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to gate (e.g. v1.0.13). Empty = dry-run.'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  test-install-unix:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run install pipe
+        run: |
+          curl -fsSL \
+            "https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.sh?cb=$GITHUB_SHA" \
+            | bash -s -- --no-auto-start
+
+      - name: Assert binary matches release tag
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          if [ -z "$tag" ]; then
+            echo "::warning::inputs.tag is empty (dry-run) — skipping version assertion"
+            exit 0
+          fi
+          expected="${tag#v}"
+          v=$(~/.nimbus/nimbus --version 2>&1 | tail -1)
+          echo "Installed: $v  Expected: $expected"
+          if ! echo "$v" | grep -q "$expected"; then
+            echo "::error::nimbus --version did not report $expected"
+            exit 1
+          fi
+
+      - name: Start the gateway
+        if: runner.os != 'Windows'
+        run: ~/.nimbus/nimbus start
+
+      - name: Assert gateway container is running
+        if: runner.os != 'Windows'
+        run: |
+          for i in $(seq 1 60); do
+            if docker ps --format '{{.Names}}' | grep -q gateway; then
+              echo "✅ gateway container is up"
+              docker ps
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::gateway container did not start within 120s"
+          docker ps -a >&2 || true
+          docker logs gateway >&2 || true
+          exit 1
+
+      - name: Assert gateway /health is 200
+        if: runner.os != 'Windows'
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 2 \
+              http://localhost:8088/health 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "✅ gateway /health returned 200"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::gateway /health never returned 200 (last code: $code)"
+          exit 1
+
+      - name: Assert caller env is clean of NIMBUS_HOME leak
+        if: runner.os != 'Windows'
+        run: |
+          leaked=$(env -i PATH=/usr/bin:/bin bash -c 'printenv NIMBUS_HOME' 2>/dev/null || true)
+          if [ -n "$leaked" ]; then
+            echo "::error::NIMBUS_HOME leaked into a fresh subshell: '$leaked'"
+            echo "::error::This is the v1.0.12 'install path = /var/folders/.../tmp.XXX' bug."
+            exit 1
+          fi
+          echo "✅ NIMBUS_HOME did not leak past the install pipe"
+
+      - name: Stop the gateway
+        if: runner.os != 'Windows'
+        run: |
+          ~/.nimbus/nimbus stop
+          for i in $(seq 1 30); do
+            if ! docker ps --format '{{.Names}}' | grep -qE 'gateway|qdrant|postgres|redis'; then
+              echo "✅ all nimbus containers stopped cleanly"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::nimbus stop left orphan containers:"
+          docker ps
+          exit 1
+
+  test-install-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Run install.ps1 pipe
+        shell: powershell
+        run: |
+          Invoke-RestMethod `
+            "https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.ps1?cb=$env:GITHUB_SHA" `
+            | Invoke-Expression
+
+      - name: Assert nimbus.exe --version matches release tag
+        shell: powershell
+        run: |
+          $tag = "${{ github.event.inputs.tag }}".TrimStart('v')
+          if ([string]::IsNullOrEmpty("${{ github.event.inputs.tag }}")) {
+            Write-Warning "inputs.tag is empty (dry-run) — skipping version assertion"
+            exit 0
+          }
+          $InstallDir = Join-Path $env:USERPROFILE ".nimbus"
+          $ExePath    = Join-Path $InstallDir "nimbus.exe"
+          if (-not (Test-Path $ExePath)) {
+            Write-Error "nimbus.exe not installed at $ExePath"
+            exit 1
+          }
+          $v = & $ExePath --version 2>&1 | Select-Object -Last 1
+          if ($v -notmatch $tag) {
+            Write-Error "nimbus.exe --version = '$v', expected to contain '$tag'"
+            exit 1
+          }
+          Write-Host "✅ nimbus.exe --version: $v"
+
+      - name: Assert compose.yaml has live digest pin
+        shell: powershell
+        run: |
+          $composePath = Join-Path $env:USERPROFILE ".nimbus\compose.yaml"
+          if (-not (Test-Path $composePath)) {
+            Write-Error "compose.yaml not installed at $composePath"
+            exit 1
+          }
+          $compose = Get-Content $composePath -Raw
+          if ($compose -notmatch '@sha256:[a-f0-9]{64}') {
+            Write-Error "compose.yaml gateway pin is not a sha256 digest — digest-refresh didn't run"
+            exit 1
+          }
+          Write-Host "✅ compose.yaml has live digest pins"
+
+      - name: Assert Defender exclusion is per-install
+        shell: powershell
+        run: |
+          $installDir = Join-Path $env:USERPROFILE ".nimbus"
+          $exclusions = Get-ItemProperty `
+            -Path 'HKLM:\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths' `
+            -ErrorAction SilentlyContinue
+          if (-not $exclusions) {
+            Write-Warning "Defender exclusion key not found (Defender may not be enabled on this runner — non-fatal)"
+            exit 0
+          }
+          $hasParentExclusion = $false
+          foreach ($name in $exclusions.PSObject.Properties.Name) {
+            if ($name -eq $env:USERPROFILE -or $name -eq "C:\") {
+              $hasParentExclusion = $true
+            }
+          }
+          if ($hasParentExclusion) {
+            Write-Error "Defender exclusion includes a parent path ($env:USERPROFILE or C:\) — install.ps1 must scope to `$InstallDir only"
+            exit 1
+          }
+          Write-Host "✅ Defender exclusion is per-install (no parent-path exclusions)"
+
+  auto-yank:
+    needs: test-install-unix
+    if: failure() && github.event.inputs.tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Yank the broken release
+        env:
+          GH_TOKEN: ${{ secrets.WIMTORQ_GIT_PAT }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          echo "::error::Release $TAG failed the cross-platform install gate"
+          echo "::error::Yanking release + tag from Yoodule/nimbus. OCI images stay on GHCR (re-push will re-tag)."
+          gh release delete --yes Yoodule/nimbus "$TAG" --cleanup-tag
+          echo "✅ Yanked $TAG"
