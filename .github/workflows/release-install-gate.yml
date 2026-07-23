@@ -24,6 +24,23 @@ jobs:
             "https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.sh?cb=$GITHUB_SHA" \
             | bash -s -- --no-auto-start
 
+      - name: Capture install path
+        id: install-path
+        run: |
+          # install.sh writes to $NIMBUS_HOME, defaulting to $HOME/.nimbus.
+          # The same $HOME must be used in the start step. Detect the path
+          # by looking for the .env that was just written.
+          if [ -f "$HOME/.nimbus/.env" ]; then
+            echo "nimbus_home=$HOME/.nimbus" >> "$GITHUB_OUTPUT"
+          elif [ -f "/root/.nimbus/.env" ]; then
+            echo "nimbus_home=/root/.nimbus" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::could not locate the install stub (.env)"
+            ls -la "$HOME/.nimbus" 2>&1 || true
+            ls -la /root/.nimbus 2>&1 || true
+            exit 1
+          fi
+
       - name: Assert binary matches release tag
         run: |
           tag="${{ github.event.inputs.tag }}"
@@ -32,7 +49,7 @@ jobs:
             exit 0
           fi
           expected="${tag#v}"
-          v=$(~/.nimbus/nimbus --version 2>&1 | tail -1)
+          v=$("${{ steps.install-path.outputs.nimbus_home }}/nimbus" --version 2>&1 | tail -1)
           echo "Installed: $v  Expected: $expected"
           if ! echo "$v" | grep -q "$expected"; then
             echo "::error::nimbus --version did not report $expected"
@@ -51,22 +68,19 @@ jobs:
 
       - name: Start the gateway (Linux only)
         if: runner.os == 'Linux'
+        env:
+          NIMBUS_HOME: ${{ steps.install-path.outputs.nimbus_home }}
+          OPENROUTER_API_KEY: sk-ci-dummy-not-real
+          QDRANT_API_KEY: ci-dummy
+          VNC_PASSWORD: ci-dummy
+          GITHUB_PERSONAL_ACCESS_TOKEN: ci-dummy
         run: |
-          # Load install stub first; fill empty secrets with non-empty placeholders
-          # so the CLI's TTY-prompt for OPENROUTER_API_KEY doesn't bail on CI.
-          if [ ! -f ~/.nimbus/.env ]; then
-            echo "::error::~/.nimbus/.env not written by install pipe"
-            exit 1
-          fi
+          # Source the install stub for any keys the install pipe populated
           set -a
-          . ~/.nimbus/.env
+          . "$NIMBUS_HOME/.env"
           set +a
-          : "${OPENROUTER_API_KEY:=sk-ci-dummy-not-real}"
-          : "${QDRANT_API_KEY:=ci-dummy}"
-          : "${VNC_PASSWORD:=ci-dummy}"
-          : "${GITHUB_PERSONAL_ACCESS_TOKEN:=ci-dummy}"
           export OPENROUTER_API_KEY QDRANT_API_KEY VNC_PASSWORD GITHUB_PERSONAL_ACCESS_TOKEN
-          ~/.nimbus/nimbus start
+          "$NIMBUS_HOME/nimbus" start
 
       - name: Assert gateway container is running (Linux only)
         if: runner.os == 'Linux'
@@ -102,7 +116,7 @@ jobs:
       - name: Stop the gateway (Linux only)
         if: runner.os == 'Linux'
         run: |
-          ~/.nimbus/nimbus stop
+          "${{ steps.install-path.outputs.nimbus_home }}/nimbus" stop
           for i in $(seq 1 30); do
             if ! docker ps --format '{{.Names}}' | grep -qE 'gateway|qdrant|postgres|redis'; then
               echo "OK all nimbus containers stopped cleanly"
@@ -175,14 +189,17 @@ jobs:
             Write-Warning "Defender exclusion key not found (Defender may not be enabled on this runner - non-fatal)"
             exit 0
           }
-          $hasParentExclusion = $false
+          # Dump the registered exclusions so a CI failure is debuggable
+          Write-Host "Registered Defender exclusions under HKLM Paths:"
+          $registered = @()
           foreach ($name in $exclusions.PSObject.Properties.Name) {
-            if ($name -eq $env:USERPROFILE -or $name -eq "C:\") {
-              $hasParentExclusion = $true
-            }
+            Write-Host "  - $name"
+            $registered += $name
           }
-          if ($hasParentExclusion) {
-            Write-Error "Defender exclusion includes a parent path - install.ps1 must scope to InstallDir only"
+          $dangerous = @($env:USERPROFILE, "C:\")
+          $bad = $registered | Where-Object { $dangerous -contains $_ }
+          if ($bad.Count -gt 0) {
+            Write-Error "Defender exclusion includes a parent path: $($bad -join ', '). install.ps1 must scope to InstallDir only"
             exit 1
           }
           Write-Host "OK Defender exclusion is per-install (no parent-path exclusions)"
