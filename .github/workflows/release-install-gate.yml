@@ -138,6 +138,19 @@ jobs:
         if: runner.os == 'Linux'
         env:
           NIMBUS_HOME: ${{ steps.install-path.outputs.nimbus_home }}
+          # Pin to linux/amd64 on the gate's Ubuntu arm64 runner.
+          # The compose's `platform: ${NIMBUS_HOST_ARCH:-linux/arm64}`
+          # default would request arm64, but GHCR's arm64 manifest is
+          # intermittently served inconsistently to anonymous pulls
+          # (no matching manifest for linux/arm64) — see
+          # https://github.com/wimtorq-dev/ci/actions/runs/30007921385.
+          # test-install.yml has been hardcoding linux/amd64 here for
+          # weeks and the Ubuntu leg has been green; the gate's macOS
+          # leg (which uses the host's real arm64 arch) is what
+          # validates the arm64 path. Pinning amd64 on the gate
+          # aligns the two workflows and unblocks the cross-platform
+          # install gate.
+          NIMBUS_HOST_ARCH: linux/amd64
         run: |
           # nimbus reads OPENROUTER_API_KEY from $NIMBUS_HOME/.env, NOT from
           # the parent process env (proven by the v1.0.12 install path bug).
