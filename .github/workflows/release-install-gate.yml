@@ -20,8 +20,16 @@ jobs:
 
       - name: Run install pipe
         run: |
+          # Yoodule/nimbus is the single source of truth for install.sh
+          # — release.sh's step 11.5 (docs-sync) cp's it there on every
+          # cut, and the same URL is what real `curl | bash` users hit.
+          # The previous wimtorq-dev/ci copy drifted out of sync
+          # (e.g. v1.0.12 install path = /var/folders/.../tmp.XXX bug
+          # was only fixed in this repo's install.sh but not synced
+          # to wimtorq-dev/ci/install.sh before the gate fired). One
+          # URL, one source, no drift.
           curl -fsSL \
-            "https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.sh?cb=$GITHUB_SHA" \
+            "https://raw.githubusercontent.com/Yoodule/nimbus/main/install.sh?cb=$GITHUB_SHA" \
             | bash -s -- --no-auto-start
 
       - name: Capture install path
@@ -228,7 +236,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $url = "https://raw.githubusercontent.com/wimtorq-dev/ci/main/install.ps1?cb=$env:GITHUB_SHA"
+          # Yoodule/nimbus is the single source of truth for
+          # install.ps1 — see the matching comment on the install.sh
+          # pipe above.
+          $url = "https://raw.githubusercontent.com/Yoodule/nimbus/main/install.ps1?cb=$env:GITHUB_SHA"
           $tmp = Join-Path $env:TEMP ("install-" + [Guid]::NewGuid() + ".ps1")
           Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
           & $tmp
@@ -319,5 +330,15 @@ jobs:
         run: |
           echo "::error::Release $TAG failed the cross-platform install gate"
           echo "::error::Yanking release + tag from Yoodule/nimbus. OCI images stay on GHCR (re-push will re-tag)."
-          gh release delete --yes Yoodule/nimbus "$TAG" --cleanup-tag
-          echo "OK Yanked $TAG"
+          # `gh release delete` accepts only ONE positional arg
+          # (the tag). The cross-repo target MUST be passed via
+          # `-R Yoodule/nimbus`, not as a second positional. The
+          # previous form silently errored with "accepts 1 arg(s),
+          # received 2" and the broken release stayed published.
+          if gh release delete --yes -R Yoodule/nimbus "$TAG" --cleanup-tag; then
+            echo "OK Yanked $TAG from Yoodule/nimbus"
+          else
+            rc=$?
+            echo "::error::gh release delete failed (exit $rc) — broken $TAG is still published. Yank manually with: gh release delete --yes -R Yoodule/nimbus $TAG --cleanup-tag"
+            exit $rc
+          fi
