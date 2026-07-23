@@ -18,6 +18,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Pre-test cleanup (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          # GitHub-hosted runners have a fresh docker daemon, but nimbus's
+          # named volumes (nimbus_redis_data, nimbus_postgres_data, etc.) can
+          # be left over from a previous run of this same workflow (the
+          # workflow is cached on the runner image). Wipe them so each run
+          # starts clean — otherwise stale volumes with different secrets
+          # conflict with the fresh install stub's REDIS_PASSWORD / POSTGRES
+          # values and `nimbus start` aborts.
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "::warning::docker not on PATH yet — install.sh should have provisioned it"
+            exit 0
+          fi
+          echo "Pre-test cleanup: removing stale nimbus docker resources"
+          docker ps -a --format '{{.Names}}' | grep -E 'gateway|qdrant|postgres|redis' \
+            | xargs -r docker rm -f 2>&1 || true
+          docker volume ls --format '{{.Name}}' | grep -E '^nimbus_' \
+            | xargs -r docker volume rm 2>&1 || true
+          docker network ls --format '{{.Name}}' | grep -E 'nimbus' \
+            | xargs -r docker network rm 2>&1 || true
+          echo "OK cleanup complete"
+
       - name: Run install pipe
         run: |
           curl -fsSL \
