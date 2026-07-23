@@ -135,6 +135,14 @@ jobs:
           # the parent process env (proven by the v1.0.12 install path bug).
           # The install stub doesn't write the auto-generated secrets, so we
           # must backfill them in the file before nimbus will start.
+          #
+          # We also unset `CI` so the CLI banner renders the full brand
+          # mark (icon + text-block + divider) instead of the text-only
+          # fallback. The gate's job is to verify the user-facing
+          # first-run experience, which includes the brand mark — see
+          # the v1.0.0 missing-icon regression that the ioctl-width
+          # fix landed for.
+          unset CI
           env_file="$NIMBUS_HOME/.env"
           [ -w "$env_file" ] || chmod 0666 "$env_file" 2>/dev/null || true
           grep -q '^OPENROUTER_API_KEY=' "$env_file" \
@@ -145,6 +153,21 @@ jobs:
             || echo 'VNC_PASSWORD=ci-dummy' >> "$env_file"
           grep -q '^GITHUB_PERSONAL_ACCESS_TOKEN=' "$env_file" \
             || echo 'GITHUB_PERSONAL_ACCESS_TOKEN=ci-dummy' >> "$env_file"
+          # Last-chance diagnostic: confirm the volume is still absent at the
+          # moment right before nimbus runs. The Pre-start cleanup step ran
+          # ~tens of seconds ago and saw no nimbus_redis_data volume; if it
+          # exists NOW, something between cleanup and start is recreating it
+          # (a stale docker compose down? install.sh side-effect?).
+          echo "Volumes right before nimbus start:"
+          docker volume ls --format '  {{.Name}}' || true
+          echo "Containers right before nimbus start:"
+          docker ps -a --format '  {{.Names}}' || true
+          if docker volume ls --format '{{.Name}}' | grep -qE '^nimbus_redis_data$'; then
+            echo "::warning::nimbus_redis_data EXISTS right before start (the Pre-start cleanup missed it)"
+            docker volume inspect nimbus_redis_data --format '{{ .CreatedAt }}' || true
+          else
+            echo "OK nimbus_redis_data is still absent right before nimbus start"
+          fi
           "$NIMBUS_HOME/nimbus" start
 
       - name: Assert gateway container is running (Linux only)
