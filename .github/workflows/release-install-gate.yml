@@ -356,28 +356,3 @@ jobs:
             exit 1
           }
           Write-Host "OK Defender exclusion is per-install (no parent-path exclusions)"
-
-  auto-yank:
-    needs: test-install-unix
-    if: failure() && github.event.inputs.tag != ''
-    runs-on: ubuntu-latest
-    steps:
-      - name: Yank the broken release
-        env:
-          GH_TOKEN: ${{ secrets.WIMTORQ_GIT_PAT }}
-          TAG: ${{ github.event.inputs.tag }}
-        run: |
-          echo "::error::Release $TAG failed the cross-platform install gate"
-          echo "::error::Yanking release + tag from Yoodule/nimbus. OCI images stay on GHCR (re-push will re-tag)."
-          # `gh release delete` accepts only ONE positional arg
-          # (the tag). The cross-repo target MUST be passed via
-          # `-R Yoodule/nimbus`, not as a second positional. The
-          # previous form silently errored with "accepts 1 arg(s),
-          # received 2" and the broken release stayed published.
-          if gh release delete --yes -R Yoodule/nimbus "$TAG" --cleanup-tag; then
-            echo "OK Yanked $TAG from Yoodule/nimbus"
-          else
-            rc=$?
-            echo "::error::gh release delete failed (exit $rc) — broken $TAG is still published. Yank manually with: gh release delete --yes -R Yoodule/nimbus $TAG --cleanup-tag"
-            exit $rc
-          fi
